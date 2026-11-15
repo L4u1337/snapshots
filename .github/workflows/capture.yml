@@ -1,0 +1,84 @@
+name: capture
+
+on:
+  schedule:
+    - cron: "45 15 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        default: "5.6"
+      give_up_at:
+        default: "13"
+      names:
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: capture
+  cancel-in-progress: false
+
+env:
+  TZ: America/Argentina/Buenos_Aires
+  HOURS: ${{ github.event.inputs.hours || '5.6' }}
+  GIVE_UP_AT: ${{ github.event.inputs.give_up_at || '13' }}
+  NAMES: ${{ github.event.inputs.names || 'ARG - Palermo,ARG - San Isidro' }}
+
+jobs:
+  run:
+    name: part ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    # A job is capped at 6 h: two parts, one after the other.
+    timeout-minutes: 355
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet requests
+
+      - name: Capture
+        run: python -u capture.py --hours "$HOURS" --give-up-at "$GIVE_UP_AT" --names "$NAMES" | tee run.log
+
+      - name: Store
+        if: always()
+        run: |
+          set -e
+          shopt -s nullglob
+          files=(out/*/*.jsonl.gz)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "Nothing captured."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth 1 origin data 2>/dev/null; then
+            git worktree add -B data ../store FETCH_HEAD
+          else
+            git worktree add --detach ../store
+            git -C ../store checkout --orphan data
+            git -C ../store rm -rfq .
+          fi
+          tag="${GITHUB_RUN_ID}-p${{ matrix.part }}"
+          for f in "${files[@]}"; do
+            day=$(basename "$(dirname "$f")")
+            name=$(basename "$f" .jsonl.gz)
+            mkdir -p "../store/pozos_vivo/$day"
+            cp "$f" "../store/pozos_vivo/$day/$name.$tag.jsonl.gz"
+          done
+          mkdir -p ../store/logs
+          cp run.log "../store/logs/$(date +%F).$tag.log" 2>/dev/null || true
+          cd ../store
+          git add -A
+          git commit -q -m "$(date +%F) part ${{ matrix.part }}"
+          for try in 1 2 3; do
+            git push origin data && exit 0
+            git pull --rebase origin data
+          done
+          exit 1
