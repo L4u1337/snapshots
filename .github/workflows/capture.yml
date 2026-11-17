@@ -2,7 +2,10 @@ name: capture
 
 on:
   schedule:
-    - cron: "45 15 * * *"
+    # Scheduled runs can start hours late, so there are several: the first one
+    # to start does the work (idling until START_AT if early) and the others
+    # queue behind it and leave at once.
+    - cron: "45 7,9,11,13,15,17 * * *"
   workflow_dispatch:
     inputs:
       hours:
@@ -11,6 +14,8 @@ on:
         default: "13"
       names:
         default: ""
+      start_at:
+        default: "12:30"
 
 permissions:
   contents: write
@@ -24,18 +29,20 @@ env:
   HOURS: ${{ github.event.inputs.hours || '5.6' }}
   GIVE_UP_AT: ${{ github.event.inputs.give_up_at || '13' }}
   NAMES: ${{ github.event.inputs.names || 'ARG - Palermo,ARG - San Isidro' }}
+  START_AT: ${{ github.event.inputs.start_at || '12:30' }}
 
 jobs:
   run:
     name: part ${{ matrix.part }}
     runs-on: ubuntu-latest
-    # A job is capped at 6 h: two parts, one after the other.
+    # A job is capped at 6 h: four parts, one after the other, cover an early
+    # start plus a full day. Parts with nothing left to do take about a minute.
     timeout-minutes: 355
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
-        part: [1, 2]
+        part: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,7 +51,7 @@ jobs:
       - run: pip install --quiet requests
 
       - name: Capture
-        run: python -u capture.py --hours "$HOURS" --give-up-at "$GIVE_UP_AT" --names "$NAMES" | tee run.log
+        run: python -u capture.py --hours "$HOURS" --give-up-at "$GIVE_UP_AT" --names "$NAMES" --start-at "$START_AT" | tee run.log
 
       - name: Store
         if: always()

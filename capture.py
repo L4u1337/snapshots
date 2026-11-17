@@ -38,7 +38,10 @@ def save(ts, p, race, mtp, status, d) -> int:
 
 
 def cycle(ses, names: set[str], ahead: int) -> tuple[int, float, int, int]:
-    progs = [p for p in get(ses, "adw/programs") if p.get("caption") in names]
+    # Yesterday's meeting stays listed (as finished) well into the next day.
+    today = datetime.now().strftime("%Y-%m-%d")
+    progs = [p for p in get(ses, "adw/programs")
+             if p.get("caption") in names and p.get("programDate") == today]
     live = done = 0
     pause = 300.0
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -76,11 +79,24 @@ def main() -> None:
     ap.add_argument("--hours", type=float, default=5.6)
     ap.add_argument("--give-up-at", type=int, default=None, metavar="HOUR",
                     help="exit if nothing has shown up by this local hour")
+    ap.add_argument("--start-at", default="", metavar="HH:MM",
+                    help="if started earlier than this local time, idle until then")
     args = ap.parse_args()
     names = {x.strip() for x in args.names.split(",")}
     ses = requests.Session()
     end = time.monotonic() + args.hours * 3600
     print(f"{datetime.now():%Y-%m-%d %H:%M:%S} start, up to {args.hours} h", flush=True)
+    if args.start_at:
+        h, m = (int(x) for x in args.start_at.split(":"))
+        now = datetime.now()
+        idle = (now.replace(hour=h, minute=m, second=0, microsecond=0) - now).total_seconds()
+        if idle > 0:
+            left = end - time.monotonic()
+            print(f"{now:%H:%M:%S} early: idle until {args.start_at}", flush=True)
+            time.sleep(min(idle, left))
+            if idle >= left:
+                print(f"{datetime.now():%H:%M:%S} still early: exit", flush=True)
+                return
     seen = False
     failures = 0
     while time.monotonic() < end:
